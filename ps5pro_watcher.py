@@ -58,6 +58,16 @@ REFURB_ENABLED = True
 REFURB_URL = "https://direct.playstation.com/de-at/certified-refurbished"
 # ---------------------------------------------------------------------
 
+# --- Geizhals.at price comparison (alerts when an offer <= max price) ---
+GEIZHALS_ENABLED = True
+GEIZHALS_PAGES = {
+    "Geizhals AT PS5 Pro 2TB": "https://geizhals.at/3298140",
+    # add more Geizhals product pages here
+}
+GEIZHALS_MAX_PRICE = 900    # official price is 899.99 -> alert at/below this
+GEIZHALS_MIN_PRICE = 300
+# ---------------------------------------------------------------------
+
 # --- Willhaben.at classified ads (new listings, not stock status) -------
 WILLHABEN_ENABLED = True
 WILLHABEN_KEYWORDS = ["ps5 pro", "playstation5 pro", "playstation 5 pro", "ps 5 pro"]
@@ -278,6 +288,49 @@ def check_refurb(last_alert):
             notify(f"PS5 Pro refurbished {note}", f"{detail}\n{url}", url)
 
 
+def geizhals_lowest(html):
+    """Lowest offer price on a Geizhals product page (JSON-LD, else text)."""
+    for block in re.findall(
+            r'<script[^>]+application/ld\+json[^>]*>(.*?)</script>', html, re.S | re.I):
+        try:
+            low = _find_key(json.loads(block), "lowPrice")
+        except Exception:
+            continue
+        if low is not None:
+            try:
+                return float(str(low).replace(",", ".")), "structured data"
+            except ValueError:
+                pass
+    m = re.search(r"ab\s*(?:&nbsp;|\s)*€\s*(?:&nbsp;|\s)*([\d.]+,\d{2})", html)
+    if m:
+        return float(m.group(1).replace(".", "").replace(",", ".")), "page text"
+    return None, None
+
+
+def check_geizhals(last_alert):
+    for name, url in GEIZHALS_PAGES.items():
+        ts = datetime.now().strftime("%H:%M:%S")
+        try:
+            r = requests.get(url, headers=HEADERS, timeout=10)
+            if r.status_code != 200:
+                print(f"[{ts}] {name}: UNKNOWN - HTTP {r.status_code}", flush=True)
+                continue
+            low, src = geizhals_lowest(r.text)
+        except Exception as e:
+            print(f"[{ts}] {name}: UNKNOWN - {e}", flush=True)
+            continue
+        if low is None:
+            print(f"[{ts}] {name}: UNKNOWN - no price found on page", flush=True)
+            continue
+        hit = GEIZHALS_MIN_PRICE <= low <= GEIZHALS_MAX_PRICE
+        print(f"[{ts}] {name}: lowest offer EUR {low:.2f} ({src}) - "
+              f"{'MATCH' if hit else 'above limit'}", flush=True)
+        if hit and time.time() - last_alert.get(url, 0) > RENOTIFY_AFTER:
+            last_alert[url] = time.time()
+            notify(f"Geizhals: PS5 Pro from EUR {low:.0f}",
+                   f"{name}: lowest offer EUR {low:.2f}\n{url}", url)
+
+
 def notify(title, message, url):
     # Push to phone via ntfy.sh (tapping opens the shop page)
     try:
@@ -349,6 +402,8 @@ def main():
             time.sleep(random.uniform(0.3, 1.0))
         if REFURB_ENABLED and not (deadline and time.time() > deadline):
             check_refurb(last_alert)
+        if GEIZHALS_ENABLED and not (deadline and time.time() > deadline):
+            check_geizhals(last_alert)
         if WILLHABEN_ENABLED and not (deadline and time.time() > deadline):
             check_willhaben(wh_seen)
         if once:
