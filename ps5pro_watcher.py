@@ -133,9 +133,12 @@ def check(url):
         return "OUT", f"schema.org: {avail}"
 
     # Fallback: text heuristics (less reliable)
-    if any(re.search(p, low) for p in OUT_PATTERNS):
-        return "OUT", "out-of-stock text found"
-    if any(re.search(p, low) for p in IN_PATTERNS):
+    out_hit = next((p for p in OUT_PATTERNS if re.search(p, low)), None)
+    in_hit = next((p for p in IN_PATTERNS if re.search(p, low)), None)
+    if out_hit:
+        extra = f"; buy-button text ALSO present ('{in_hit}')" if in_hit else ""
+        return "OUT", f"out-of-stock text found ('{out_hit}'){extra}"
+    if in_hit:
         return "IN_STOCK", "buy button text found (verify manually!)"
     return "UNKNOWN", "could not determine (page may load content via JavaScript)"
 
