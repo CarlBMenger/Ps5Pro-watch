@@ -80,6 +80,7 @@ HEADERS = {
 }
 
 OUT_PATTERNS = [
+    r"nicht zum kauf erhältlich", r"nicht zum kauf erh&auml;ltlich",
     r"zurzeit nicht verf", r"derzeit nicht verf", r"nicht verfügbar",
     r"ausverkauft", r"nicht vorrätig", r"currently unavailable",
     r"out of stock", r"sold out", r"derzeit nicht lieferbar",
@@ -121,7 +122,9 @@ def check(url):
     low = html.lower()
 
     avail, price = parse_jsonld(html)
+    notice = bool(re.search(r"nicht zum kauf erh(ä|&auml;|&#228;)ltlich", low))
     if avail:
+        note = " | page says 'Nicht zum Kauf erhältlich'" if notice else ""
         if "instock" in avail.lower() or "limitedavailability" in avail.lower():
             if MAX_PRICE_EUR and price:
                 try:
@@ -129,8 +132,9 @@ def check(url):
                         return "OUT", f"in stock but price {price} > limit"
                 except ValueError:
                     pass
-            return "IN_STOCK", f"schema.org: {avail}, price {price}"
-        return "OUT", f"schema.org: {avail}"
+            conflict = " - CONFLICT, verify by hand!" if notice else ""
+            return "IN_STOCK", f"schema.org: {avail}, price {price}{note}{conflict}"
+        return "OUT", f"schema.org: {avail}{note}"
 
     # Fallback: text heuristics (less reliable)
     out_hit = next((p for p in OUT_PATTERNS if re.search(p, low)), None)
