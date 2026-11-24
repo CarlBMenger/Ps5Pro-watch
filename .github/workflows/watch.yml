@@ -3,14 +3,18 @@ on:
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch:
+concurrency:
+  group: ps5-watch
+  cancel-in-progress: false
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 6
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install requests
-      - run: python ps5pro_watcher.py --once
+      - run: python ps5pro_watcher.py --duration 285
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
