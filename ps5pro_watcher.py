@@ -53,8 +53,9 @@ STORES = {
 
 # --- Willhaben.at classified ads (new listings, not stock status) -------
 WILLHABEN_ENABLED = True
+WILLHABEN_KEYWORDS = ["ps5 pro", "playstation5 pro", "playstation 5 pro", "ps 5 pro"]
 WILLHABEN_URL = ("https://www.willhaben.at/iad/kaufen-und-verkaufen/marktplatz"
-                 "?keyword=ps5%20pro&sort=1&rows=30")   # sort=1 -> newest first
+                 "?keyword={kw}&sort=1&rows=30")   # sort=1 -> newest first
 WILLHABEN_MAX_PRICE = 900     # only ads at or below this price (EUR)
 WILLHABEN_MIN_PRICE = 300     # ignore "1 EUR" bait / accessory ads
 WILLHABEN_MAX_AGE_MIN = 8     # alert only for ads published in the last N minutes
@@ -147,9 +148,10 @@ def _find_key(obj, key):
     return None
 
 
-def willhaben_ads():
+def willhaben_ads(keyword):
     """Return list of dicts {id,title,price,url,age_min} or raise."""
-    r = requests.get(WILLHABEN_URL, headers=HEADERS, timeout=20)
+    from urllib.parse import quote
+    r = requests.get(WILLHABEN_URL.format(kw=quote(keyword)), headers=HEADERS, timeout=20)
     if r.status_code != 200:
         raise RuntimeError(f"Willhaben HTTP {r.status_code}")
     m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', r.text, re.S)
@@ -177,15 +179,24 @@ def willhaben_ads():
 
 def check_willhaben(seen):
     ts = datetime.now().strftime("%H:%M:%S")
-    try:
-        ads = willhaben_ads()
-    except Exception as e:
-        print(f"[{ts}] Willhaben: UNKNOWN - {e}", flush=True)
+    ads, errors = {}, []
+    for kw in WILLHABEN_KEYWORDS:
+        try:
+            for ad in willhaben_ads(kw):
+                ads[ad["id"]] = ad          # de-duplicate across keywords
+        except Exception as e:
+            errors.append(f"'{kw}': {e}")
+        time.sleep(random.uniform(0.3, 1.0))
+    if errors:
+        print(f"[{ts}] Willhaben: UNKNOWN - {'; '.join(errors)}", flush=True)
+    if not ads:
         return
+    ads = list(ads.values())
     new = 0
     for ad in ads:
         t = ad["title"].lower()
-        if not (("ps5" in t or "playstation 5" in t or "playstation5" in t) and "pro" in t):
+        compact = re.sub(r"[\s\-_.]", "", t)     # "PS 5 Pro" -> "ps5pro"
+        if "ps5pro" not in compact and "playstation5pro" not in compact:
             continue
         if any(w in t for w in WILLHABEN_BAD_WORDS):
             continue
