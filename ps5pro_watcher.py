@@ -50,6 +50,17 @@ STORES = {
     # "Expert AT":         "https://www.expert.at/...",
     # "Hartlauer":         "https://www.hartlauer.at/...",
 }
+
+# --- Willhaben.at classified ads (new listings, not stock status) -------
+WILLHABEN_ENABLED = True
+WILLHABEN_URL = ("https://www.willhaben.at/iad/kaufen-und-verkaufen/marktplatz"
+                 "?keyword=ps5%20pro&sort=1&rows=30")   # sort=1 -> newest first
+WILLHABEN_MAX_PRICE = 900     # only ads at or below this price (EUR)
+WILLHABEN_MIN_PRICE = 300     # ignore "1 EUR" bait / accessory ads
+WILLHABEN_MAX_AGE_MIN = 8     # alert only for ads published in the last N minutes
+WILLHABEN_BAD_WORDS = ["suche", "defekt", "bastler", "ersatzteil", "tausch",
+                       "hülle", "huelle", "standfuß", "standfuss", "controller",
+                       "laufwerk", "spiel", "ankauf", "kaufe", "reparatur"]
 # ---------------------------------------------------------------------
 
 HEADERS = {
@@ -119,6 +130,78 @@ def check(url):
     return "UNKNOWN", "could not determine (page may load content via JavaScript)"
 
 
+def _find_key(obj, key):
+    """Recursively find the first value stored under `key`."""
+    if isinstance(obj, dict):
+        if key in obj:
+            return obj[key]
+        for v in obj.values():
+            r = _find_key(v, key)
+            if r is not None:
+                return r
+    elif isinstance(obj, list):
+        for v in obj:
+            r = _find_key(v, key)
+            if r is not None:
+                return r
+    return None
+
+
+def willhaben_ads():
+    """Return list of dicts {id,title,price,url,age_min} or raise."""
+    r = requests.get(WILLHABEN_URL, headers=HEADERS, timeout=20)
+    if r.status_code != 200:
+        raise RuntimeError(f"Willhaben HTTP {r.status_code}")
+    m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', r.text, re.S)
+    if not m:
+        raise RuntimeError("Willhaben page format not recognised")
+    summaries = _find_key(json.loads(m.group(1)), "advertSummary") or []
+    ads = []
+    now = time.time()
+    for ad in summaries:
+        try:
+            attrs = {a["name"]: a.get("values", []) for a in ad["attributes"]["attribute"]}
+            first = lambda k: (attrs.get(k) or [None])[0]
+            title = ad.get("description") or first("HEADING") or ""
+            price = float(str(first("PRICE") or "0").replace(",", "."))
+            seo = first("SEO_URL") or ""
+            url = "https://www.willhaben.at/iad/" + seo.lstrip("/")
+            published = first("PUBLISHED")           # epoch milliseconds
+            age_min = (now - int(published) / 1000) / 60 if published else None
+            ads.append({"id": str(ad.get("id")), "title": title, "price": price,
+                        "url": url, "age_min": age_min})
+        except Exception:
+            continue
+    return ads
+
+
+def check_willhaben(seen):
+    ts = datetime.now().strftime("%H:%M:%S")
+    try:
+        ads = willhaben_ads()
+    except Exception as e:
+        print(f"[{ts}] Willhaben: UNKNOWN - {e}", flush=True)
+        return
+    new = 0
+    for ad in ads:
+        t = ad["title"].lower()
+        if not (("ps5" in t or "playstation 5" in t or "playstation5" in t) and "pro" in t):
+            continue
+        if any(w in t for w in WILLHABEN_BAD_WORDS):
+            continue
+        if not (WILLHABEN_MIN_PRICE <= ad["price"] <= WILLHABEN_MAX_PRICE):
+            continue
+        if ad["age_min"] is not None and ad["age_min"] > WILLHABEN_MAX_AGE_MIN:
+            continue
+        if ad["id"] in seen:
+            continue
+        seen.add(ad["id"])
+        new += 1
+        notify(f"New PS5 Pro ad: EUR {ad['price']:.0f}",
+               f"{ad['title']}\n{ad['url']}", ad["url"])
+    print(f"[{ts}] Willhaben: {len(ads)} ads read, {new} new match(es)", flush=True)
+
+
 def notify(title, message, url):
     # Push to phone via ntfy.sh (tapping opens the shop page)
     try:
@@ -164,6 +247,7 @@ def main():
 
     last_alert = {}
     warned_unknown = set()
+    wh_seen = set()
     print(f"Watching {len(STORES)} pages every ~{interval}s.")
     while True:
         round_start = time.time()
@@ -183,6 +267,8 @@ def main():
                 warned_unknown.add(name)
                 notify("PS5 watcher: check needed", f"{name}: {detail}", url)
             time.sleep(random.uniform(0.3, 1.0))
+        if WILLHABEN_ENABLED:
+            check_willhaben(wh_seen)
         if once:
             return
         wait = max(1, interval - (time.time() - round_start))
