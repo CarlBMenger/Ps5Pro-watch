@@ -33,6 +33,8 @@ STORES = {
         "https://direct.playstation.com/de-at/buy-consoles/playstation5-pro-console",
     "Sony PlayStation Direct AT (2 TB)":
         "https://direct.playstation.com/de-at/buy-consoles/playstation5-pro-console-2-tb",
+    "Sony Direct AT refurbished (2 TB)":
+        "https://direct.playstation.com/de-at/buy-consoles/certified-refurbished-playstation5-pro-console",
     "MediaMarkt AT (1 TB, Sony)":
         "https://www.mediamarkt.at/de/product/_sony-playstationr5-pro-2007357.html",
     "MediaMarkt AT (2 TB, Sony)":
@@ -51,6 +53,11 @@ STORES = {
     # "Hartlauer":         "https://www.hartlauer.at/...",
 }
 
+# --- Sony Direct "Generalüberholt und Zertifiziert" (refurbished) --------
+REFURB_ENABLED = True
+REFURB_URL = "https://direct.playstation.com/de-at/certified-refurbished"
+# ---------------------------------------------------------------------
+
 # --- Willhaben.at classified ads (new listings, not stock status) -------
 WILLHABEN_ENABLED = True
 WILLHABEN_KEYWORDS = ["ps5 pro", "playstation5 pro", "playstation 5 pro", "ps 5 pro"]
@@ -63,6 +70,8 @@ WILLHABEN_BAD_WORDS = ["suche", "defekt", "bastler", "ersatzteil", "tausch",
                        "hülle", "huelle", "standfuß", "standfuss", "controller",
                        "laufwerk", "spiel", "ankauf", "kaufe", "reparatur"]
 # ---------------------------------------------------------------------
+
+DEADLINE = None   # set in main() when --duration is used
 
 HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -103,7 +112,7 @@ def parse_jsonld(html):
 
 def check(url):
     """Return (status, detail) where status in IN_STOCK / OUT / UNKNOWN."""
-    r = requests.get(url, headers=HEADERS, timeout=20)
+    r = requests.get(url, headers=HEADERS, timeout=10)
     if r.status_code in (403, 429, 503):
         return "UNKNOWN", f"blocked/rate-limited (HTTP {r.status_code})"
     if r.status_code != 200:
@@ -151,7 +160,7 @@ def _find_key(obj, key):
 def willhaben_ads(keyword):
     """Return list of dicts {id,title,price,url,age_min} or raise."""
     from urllib.parse import quote
-    r = requests.get(WILLHABEN_URL.format(kw=quote(keyword)), headers=HEADERS, timeout=20)
+    r = requests.get(WILLHABEN_URL.format(kw=quote(keyword)), headers=HEADERS, timeout=10)
     if r.status_code != 200:
         raise RuntimeError(f"Willhaben HTTP {r.status_code}")
     m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', r.text, re.S)
@@ -181,6 +190,8 @@ def check_willhaben(seen):
     ts = datetime.now().strftime("%H:%M:%S")
     ads, errors = {}, []
     for kw in WILLHABEN_KEYWORDS:
+        if DEADLINE and time.time() > DEADLINE:
+            break
         try:
             for ad in willhaben_ads(kw):
                 ads[ad["id"]] = ad          # de-duplicate across keywords
@@ -211,6 +222,53 @@ def check_willhaben(seen):
         notify(f"New PS5 Pro ad: EUR {ad['price']:.0f}",
                f"{ad['title']}\n{ad['url']}", ad["url"])
     print(f"[{ts}] Willhaben: {len(ads)} ads read, {new} new match(es)", flush=True)
+
+
+def check_refurb(last_alert):
+    """Watch Sony's refurbished page for a PS5 Pro listing and check its stock."""
+    from urllib.parse import urljoin
+    import html as htmllib
+    ts = datetime.now().strftime("%H:%M:%S")
+    try:
+        r = requests.get(REFURB_URL, headers=HEADERS, timeout=10)
+        if r.status_code != 200:
+            print(f"[{ts}] Sony refurbished: UNKNOWN - HTTP {r.status_code}", flush=True)
+            return
+        page = r.text
+    except Exception as e:
+        print(f"[{ts}] Sony refurbished: UNKNOWN - {e}", flush=True)
+        return
+
+    # 1) product links on the page that look like a PS5 Pro refurbished product
+    links = []
+    for href in re.findall(r'href="([^"]+)"', page):
+        if "certified-refurbished" in href and re.search(r"[-/]pro(?:[-/?#]|$)", href):
+            full = urljoin(REFURB_URL, htmllib.unescape(href))
+            if full.rstrip("/") != REFURB_URL.rstrip("/") and full not in links:
+                links.append(full)
+    # 2) fallback: product title text mentioning Pro
+    text = htmllib.unescape(re.sub(r"<[^>]+>", " ", page))
+    title_hit = re.search(
+        r"Generalüberholt\w*\s+und\s+Zertifiziert\s+(?:PlayStation\s*®?\s*5|PS5\s*®?)\s*Pro",
+        text, re.I)
+
+    if not links and not title_hit:
+        print(f"[{ts}] Sony refurbished: no PS5 Pro listed", flush=True)
+        return
+    if not links:
+        links = [REFURB_URL]
+
+    for url in links:
+        name = "Sony refurbished PS5 Pro"
+        try:
+            status, detail = check(url) if url != REFURB_URL else ("UNKNOWN", "listed on page, open it to check")
+        except Exception as e:
+            status, detail = "UNKNOWN", f"error: {e}"
+        print(f"[{ts}] {name}: {status} - {detail} ({url})", flush=True)
+        if status in ("IN_STOCK", "UNKNOWN") and time.time() - last_alert.get(url, 0) > RENOTIFY_AFTER:
+            last_alert[url] = time.time()
+            note = "AVAILABLE" if status == "IN_STOCK" else "LISTED (verify stock)"
+            notify(f"PS5 Pro refurbished {note}", f"{detail}\n{url}", url)
 
 
 def notify(title, message, url):
@@ -252,7 +310,9 @@ def main():
     duration = None
     if "--duration" in sys.argv:
         duration = int(sys.argv[sys.argv.index("--duration") + 1])
+    global DEADLINE
     deadline = time.time() + duration if duration else None
+    DEADLINE = deadline
     interval = 30 if duration else CHECK_INTERVAL
     scripted = once or duration is not None   # no "check needed" spam on cron runs
 
@@ -263,6 +323,8 @@ def main():
     while True:
         round_start = time.time()
         for name, url in STORES.items():
+            if deadline and time.time() > deadline:
+                return
             ts = datetime.now().strftime("%H:%M:%S")
             try:
                 status, detail = check(url)
@@ -278,7 +340,9 @@ def main():
                 warned_unknown.add(name)
                 notify("PS5 watcher: check needed", f"{name}: {detail}", url)
             time.sleep(random.uniform(0.3, 1.0))
-        if WILLHABEN_ENABLED:
+        if REFURB_ENABLED and not (deadline and time.time() > deadline):
+            check_refurb(last_alert)
+        if WILLHABEN_ENABLED and not (deadline and time.time() > deadline):
             check_willhaben(wh_seen)
         if once:
             return
