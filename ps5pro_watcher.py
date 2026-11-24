@@ -148,30 +148,47 @@ def notify(title, message, url):
 
 
 def main():
-    once = "--once" in sys.argv   # single check, for cron / GitHub Actions
+    """
+    python ps5pro_watcher.py                 -> loop forever (home PC / Pi)
+    python ps5pro_watcher.py --once          -> one round, then exit
+    python ps5pro_watcher.py --duration 280  -> loop for 280 s, then exit
+                                                (used by GitHub Actions)
+    """
+    once = "--once" in sys.argv
+    duration = None
+    if "--duration" in sys.argv:
+        duration = int(sys.argv[sys.argv.index("--duration") + 1])
+    deadline = time.time() + duration if duration else None
+    interval = 30 if duration else CHECK_INTERVAL
+    scripted = once or duration is not None   # no "check needed" spam on cron runs
+
     last_alert = {}
     warned_unknown = set()
-    print(f"Watching {len(STORES)} pages. Ctrl+C to stop.")
+    print(f"Watching {len(STORES)} pages every ~{interval}s.")
     while True:
+        round_start = time.time()
         for name, url in STORES.items():
             ts = datetime.now().strftime("%H:%M:%S")
             try:
                 status, detail = check(url)
             except Exception as e:
                 status, detail = "UNKNOWN", f"error: {e}"
-            print(f"[{ts}] {name}: {status} - {detail}")
+            print(f"[{ts}] {name}: {status} - {detail}", flush=True)
 
             if status == "IN_STOCK":
                 if time.time() - last_alert.get(name, 0) > RENOTIFY_AFTER:
                     last_alert[name] = time.time()
                     notify(f"PS5 Pro available: {name}", f"{detail}\n{url}", url)
-            elif status == "UNKNOWN" and not once and name not in warned_unknown:
+            elif status == "UNKNOWN" and not scripted and name not in warned_unknown:
                 warned_unknown.add(name)
                 notify("PS5 watcher: check needed", f"{name}: {detail}", url)
-            time.sleep(random.uniform(2, 5))
+            time.sleep(random.uniform(0.3, 1.0))
         if once:
             return
-        time.sleep(CHECK_INTERVAL + random.uniform(-10, 10))
+        wait = max(1, interval - (time.time() - round_start))
+        if deadline and time.time() + wait >= deadline:
+            return
+        time.sleep(wait)
 
 
 if __name__ == "__main__":
