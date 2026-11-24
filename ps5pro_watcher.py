@@ -37,8 +37,18 @@ STORES = {
         "https://www.mediamarkt.at/de/product/_sony-playstationr5-pro-2007357.html",
     "MediaMarkt AT (2 TB, Sony)":
         "https://www.mediamarkt.at/de/product/_sony-playstationr5-pro-2-tb-2049935.html",
-    # Add more product pages here (Saturn.at, Amazon.de, Gamestop, ...):
-    # "Name": "https://...",
+    "Alza AT (2 TB)":
+        "https://www.alza.at/gaming/playstation-5-pro-2tb-d13109460.htm",
+    # ---- Add more shops here: open the PS5 Pro PRODUCT page in your browser,
+    # ---- copy the address bar URL, and add a line (remove the leading #):
+    # "Saturn AT":         "https://www.saturn.at/de/product/...",
+    # "Amazon.de (-> AT)": "https://www.amazon.de/dp/ASIN",
+    # "Cyberport AT":      "https://www.cyberport.at/...",
+    # "Alternate AT":      "https://www.alternate.at/...",
+    # "GameStop AT":       "https://www.gamestop.at/...",
+    # "Otto AT":           "https://www.otto.at/...",
+    # "Expert AT":         "https://www.expert.at/...",
+    # "Hartlauer":         "https://www.hartlauer.at/...",
 }
 # ---------------------------------------------------------------------
 
@@ -52,6 +62,7 @@ OUT_PATTERNS = [
     r"zurzeit nicht verf", r"derzeit nicht verf", r"nicht verfügbar",
     r"ausverkauft", r"nicht vorrätig", r"currently unavailable",
     r"out of stock", r"sold out", r"derzeit nicht lieferbar",
+    r"keine lieferung möglich", r"bald wieder verfügbar", r"derzeit nicht erhältlich",
 ]
 IN_PATTERNS = [r"in den warenkorb", r"add to cart", r"jetzt kaufen", r"in den einkaufswagen"]
 
