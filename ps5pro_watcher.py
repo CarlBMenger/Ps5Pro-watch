@@ -35,6 +35,8 @@ STORES = {
         "https://direct.playstation.com/de-at/buy-consoles/playstation5-pro-console-2-tb",
     "Sony Direct AT refurbished (2 TB)":
         "https://direct.playstation.com/de-at/buy-consoles/certified-refurbished-playstation5-pro-console",
+    "PlayStation.com AT refurbished PS5 Pro (status page)":
+        "https://www.playstation.com/de-at/ps5/certified-refurbished-playstation-5-pro-console/product/PSD001-PSDE00356_47-RECERTIFIE3YQNSE/",
     "MediaMarkt AT (1 TB, Sony)":
         "https://www.mediamarkt.at/de/product/_sony-playstationr5-pro-2007357.html",
     "MediaMarkt AT (2 TB, Sony)":
@@ -51,6 +53,19 @@ STORES = {
     # "Otto AT":           "https://www.otto.at/...",
     # "Expert AT":         "https://www.expert.at/...",
     # "Hartlauer":         "https://www.hartlauer.at/...",
+}
+
+# Where the push notification should send you (instead of the checked page)
+ALERT_LINKS = {
+    "https://www.playstation.com/de-at/ps5/certified-refurbished-playstation-5-pro-console/product/PSD001-PSDE00356_47-RECERTIFIE3YQNSE/":
+        "https://direct.playstation.com/de-at/buy-consoles/certified-refurbished-playstation5-pro-console",
+}
+
+# Pages whose status text is rendered in the HTML and can be trusted strictly:
+# phrase present -> OUT; page recognised but phrase gone -> IN_STOCK.
+STRICT_PAGES = {
+    "playstation.com/de-at/ps5/certified-refurbished": {
+        "must": ["5 pro"], "out": ["nicht zum kauf erhältlich"]},
 }
 
 # --- Sony Direct "Generalüberholt und Zertifiziert" (refurbished) --------
@@ -156,12 +171,30 @@ def check(url):
             return "IN_STOCK", f"schema.org: {avail}, price {price}{note}{conflict}"
         return "OUT", f"schema.org: {avail}{note}"
 
-    # Fallback: text heuristics (less reliable)
-    out_hit = next((p for p in OUT_PATTERNS if re.search(p, low)), None)
-    in_hit = next((p for p in IN_PATTERNS if re.search(p, low)), None)
-    if out_hit:
-        extra = f"; buy-button text ALSO present ('{in_hit}')" if in_hit else ""
-        return "OUT", f"out-of-stock text found ('{out_hit}'){extra}"
+    import html as _h
+    text = _h.unescape(low)
+
+    # Strict per-page rules (server-rendered status text)
+    for key, rule in STRICT_PAGES.items():
+        if key in url:
+            if not all(m in text for m in rule["must"]):
+                return "UNKNOWN", "page content not recognised"
+            hit = next((o for o in rule["out"] if o in text), None)
+            if hit:
+                return "OUT", f"page says '{hit}'"
+            return "IN_STOCK", "'not available' notice is GONE - verify now!"
+
+    # Fallback: text heuristics. STRONG phrases are explicit sold-out notices;
+    # WEAK ones can sit in page templates, so a visible buy button beats them.
+    WEAK = (r"zurzeit nicht verf", r"derzeit nicht verf", r"nicht verfügbar")
+    strong_hit = next((p for p in OUT_PATTERNS if p not in WEAK and re.search(p, text)), None)
+    weak_hit = next((p for p in WEAK if re.search(p, text)), None)
+    in_hit = next((p for p in IN_PATTERNS if re.search(p, text)), None)
+    # NOTE: on Sony Direct the weak text AND a buy-button text are both present
+    # even when sold out (seen in the logs), so any out-of-stock text wins.
+    if strong_hit or weak_hit:
+        extra = f"; buy-button text also present ('{in_hit}')" if in_hit else ""
+        return "OUT", f"out-of-stock text found ('{strong_hit or weak_hit}'){extra}"
     if in_hit:
         return "IN_STOCK", "buy button text found (verify manually!)"
     return "UNKNOWN", "could not determine (page may load content via JavaScript)"
@@ -455,7 +488,8 @@ def main():
             if status == "IN_STOCK":
                 if time.time() - last_alert.get(name, 0) > RENOTIFY_AFTER:
                     last_alert[name] = time.time()
-                    notify(f"PS5 Pro available: {name}", f"{detail}\n{url}", url)
+                    link = ALERT_LINKS.get(url, url)
+                    notify(f"PS5 Pro available: {name}", f"{detail}\n{link}", link)
             elif status == "UNKNOWN" and not scripted and name not in warned_unknown:
                 warned_unknown.add(name)
                 notify("PS5 watcher: check needed", f"{name}: {detail}", url)
