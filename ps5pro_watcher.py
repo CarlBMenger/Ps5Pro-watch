@@ -58,6 +58,16 @@ REFURB_ENABLED = True
 REFURB_URL = "https://direct.playstation.com/de-at/certified-refurbished"
 # ---------------------------------------------------------------------
 
+# --- Cyberport.at (watches console listing pages for a PS5 Pro product) --
+CYBERPORT_ENABLED = True
+CYBERPORT_LISTINGS = [
+    "https://www.cyberport.at/gaming/playstation.html",
+    "https://www.cyberport.at/tools/search.html?q=ps5%20pro",
+]
+# If you find the exact PS5 Pro product page on cyberport.at, add it to STORES
+# above instead (more reliable than the listing watcher).
+# ---------------------------------------------------------------------
+
 # --- Geizhals.at price comparison (alerts when an offer <= max price) ---
 GEIZHALS_ENABLED = True
 GEIZHALS_PAGES = {
@@ -273,19 +283,24 @@ def check_refurb(last_alert):
         print(f"[{ts}] Sony refurbished: no PS5 Pro listed", flush=True)
         return
     if not links:
-        links = [REFURB_URL]
+        # Pro is only mentioned on the page (e.g. a sold-out card): no product
+        # link to check, so log it but do NOT alert (the product-page check in
+        # STORES handles stock).
+        print(f"[{ts}] Sony refurbished: PS5 Pro mentioned on listing page, "
+              f"no product link to check (no alert)", flush=True)
+        return
 
     for url in links:
         name = "Sony refurbished PS5 Pro"
         try:
-            status, detail = check(url) if url != REFURB_URL else ("UNKNOWN", "listed on page, open it to check")
+            status, detail = check(url)
         except Exception as e:
             status, detail = "UNKNOWN", f"error: {e}"
         print(f"[{ts}] {name}: {status} - {detail} ({url})", flush=True)
-        if status in ("IN_STOCK", "UNKNOWN") and time.time() - last_alert.get(url, 0) > RENOTIFY_AFTER:
+        # Alert ONLY on a confirmed IN_STOCK result (never on UNKNOWN / listed-only)
+        if status == "IN_STOCK" and time.time() - last_alert.get(url, 0) > RENOTIFY_AFTER:
             last_alert[url] = time.time()
-            note = "AVAILABLE" if status == "IN_STOCK" else "LISTED (verify stock)"
-            notify(f"PS5 Pro refurbished {note}", f"{detail}\n{url}", url)
+            notify("PS5 Pro refurbished AVAILABLE", f"{detail}\n{url}", url)
 
 
 def geizhals_lowest(html):
@@ -329,6 +344,51 @@ def check_geizhals(last_alert):
             last_alert[url] = time.time()
             notify(f"Geizhals: PS5 Pro from EUR {low:.0f}",
                    f"{name}: lowest offer EUR {low:.2f}\n{url}", url)
+
+
+def check_cyberport(last_alert):
+    """Find PS5 Pro *console* product links on Cyberport listing pages and
+    check each product page's stock. Alerts only on confirmed IN_STOCK."""
+    from urllib.parse import urljoin
+    import html as htmllib
+    found = []
+    for listing in CYBERPORT_LISTINGS:
+        ts = datetime.now().strftime("%H:%M:%S")
+        try:
+            r = requests.get(listing, headers=HEADERS, timeout=10)
+            if r.status_code != 200:
+                print(f"[{ts}] Cyberport: UNKNOWN - HTTP {r.status_code} ({listing})", flush=True)
+                continue
+            page = r.text
+        except Exception as e:
+            print(f"[{ts}] Cyberport: UNKNOWN - {e}", flush=True)
+            continue
+        for href in re.findall(r'href="([^"]+)"', page):
+            h = htmllib.unescape(href).lower()
+            if "/pdp/" not in h:
+                continue
+            if not re.search(r"(ps5|playstation)-?5?-?pro|ps-?5-pro", h):
+                continue
+            if "konsole" not in h or any(w in h for w in (
+                    "zubehoer", "laufwerk", "controller", "ladestation", "huelle",
+                    "headset", "spiel", "standfuss", "festplatte", "ssd")):
+                continue
+            full = urljoin(listing, htmllib.unescape(href))
+            if full not in found:
+                found.append(full)
+    ts = datetime.now().strftime("%H:%M:%S")
+    if not found:
+        print(f"[{ts}] Cyberport: no PS5 Pro console product found on listing pages", flush=True)
+        return
+    for url in found:
+        try:
+            status, detail = check(url)
+        except Exception as e:
+            status, detail = "UNKNOWN", f"error: {e}"
+        print(f"[{ts}] Cyberport PS5 Pro: {status} - {detail} ({url})", flush=True)
+        if status == "IN_STOCK" and time.time() - last_alert.get(url, 0) > RENOTIFY_AFTER:
+            last_alert[url] = time.time()
+            notify("PS5 Pro available: Cyberport AT", f"{detail}\n{url}", url)
 
 
 def notify(title, message, url):
@@ -402,6 +462,8 @@ def main():
             time.sleep(random.uniform(0.3, 1.0))
         if REFURB_ENABLED and not (deadline and time.time() > deadline):
             check_refurb(last_alert)
+        if CYBERPORT_ENABLED and not (deadline and time.time() > deadline):
+            check_cyberport(last_alert)
         if GEIZHALS_ENABLED and not (deadline and time.time() > deadline):
             check_geizhals(last_alert)
         if WILLHABEN_ENABLED and not (deadline and time.time() > deadline):
