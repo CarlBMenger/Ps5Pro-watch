@@ -263,25 +263,33 @@ def check_willhaben(seen):
     if not ads:
         return
     ads = list(ads.values())
-    new = 0
-    for ad in ads:
+    n_title = n_word = n_price = n_age = new = 0
+    for ad in sorted(ads, key=lambda a: a["age_min"] if a["age_min"] is not None else 1e9):
         t = ad["title"].lower()
         compact = re.sub(r"[\s\-_.]", "", t)     # "PS 5 Pro" -> "ps5pro"
         if "ps5pro" not in compact and "playstation5pro" not in compact:
             continue
+        n_title += 1
         if any(w in t for w in WILLHABEN_BAD_WORDS):
             continue
+        n_word += 1
         if not (WILLHABEN_MIN_PRICE <= ad["price"] <= WILLHABEN_MAX_PRICE):
             continue
+        n_price += 1
         if ad["age_min"] is not None and ad["age_min"] > WILLHABEN_MAX_AGE_MIN:
             continue
+        n_age += 1
         if ad["id"] in seen:
             continue
         seen.add(ad["id"])
         new += 1
         notify(f"New PS5 Pro ad: EUR {ad['price']:.0f}",
                f"{ad['title']}\n{ad['url']}", ad["url"])
-    print(f"[{ts}] Willhaben: {len(ads)} ads read, {new} new match(es)", flush=True)
+    print(f"[{ts}] Willhaben: {len(ads)} ads | Pro titles {n_title} | ok words {n_word} | "
+          f"price {WILLHABEN_MIN_PRICE}-{WILLHABEN_MAX_PRICE} {n_price} | fresh {n_age} | NEW {new}", flush=True)
+    newest = sorted((a for a in ads if a["age_min"] is not None), key=lambda a: a["age_min"])[:2]
+    for a in newest:
+        print(f"    newest: '{a['title'][:50]}' EUR {a['price']:.0f}, {a['age_min']:.0f} min old", flush=True)
 
 
 def check_refurb(last_alert):
